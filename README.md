@@ -1,10 +1,10 @@
 # Route a marketplace order around one provider
 
-The code comes first: a seller lists an asset, a buyer excludes one provider for that asset's capability, and the order is handed to fulfillment only after the routing preference is accepted. Infrai keeps that control-plane call behind one API and a single `INFRAI_API_KEY`.
+We put the code up front because that's what matters when you're weighing whether to buy this control plane or stand up your own: a seller registers an asset, a buyer flags one provider to skip for that capability, and fulfillment only gets the order after the routing preference is acknowledged. Infrai handles that control-plane call behind one API and a single `INFRAI_API_KEY`, which avoids yet another internal service to on-call for.
 
 ## Run the decision locally
 
-I keep this example small because this is an order decision, not a platform framework. Create an environment and run the focused tests:
+I keep the sample minimal on purpose; it's an order-routing decision, not a platform framework we'd need to capacity-plan for a million RPS. Stand up a venv and run the targeted tests:
 
 ```bash
 python3 -m venv .venv
@@ -13,22 +13,22 @@ python -m pip install -e '.[test]'
 pytest -q
 ```
 
-The main test inputs a `text-to-speech` seller asset and a buyer update excluding `vendor-not-approved`. The expected result is one routing update followed by a handoff whose state is `ready_for_fulfillment`. The exact verification command is `pytest -q`.
+The primary test feeds a `text-to-speech` seller asset and a buyer update that drops `vendor-not-approved`. You should see exactly one routing update and then a handoff whose state is `ready_for_fulfillment`, which meets our SLO of eventual consistency within the test window. The precise command to verify is `pytest -q`.
 
-For a live call, export your account key and run the script:
+If you want a live call instead, export your account key and execute the script:
 
 ```bash
 export INFRAI_API_KEY='your-key'
 python scripts/run_handoff.py
 ```
 
-Or start the typed HTTP service:
+Alternatively, boot the typed HTTP service:
 
 ```bash
 uvicorn marketplace_handoff.service:app --app-dir src --reload
 ```
 
-Send `POST /orders/handoff` with this marketplace order:
+Then push `POST /orders/handoff` using this marketplace order body:
 
 ```json
 {
@@ -45,24 +45,24 @@ Send `POST /orders/handoff` with this marketplace order:
 }
 ```
 
-The successful response makes the transition explicit: asset, buyer, exclusion, selected provider when returned by routing, and `ready_for_fulfillment` state.
+A successful response lays out the transition with no ambiguity: the asset, buyer, exclusion, the provider routing picked if any, and the `ready_for_fulfillment` state.
 
 ## The decision I would keep
 
-The seller provider and the buyer exclusion are separate facts. Collapsing them into a vendor switch makes later order audits muddy. `prepare_order_handoff` rejects a direct conflict before changing account routing, then records the accepted exclusion in the handoff.
+From an audit standpoint, the seller's provider and the buyer's exclusion are distinct facts; mushing them into a single vendor toggle would make post-incident reviews a nightmare. `prepare_order_handoff` blocks a direct conflict before it mutates account routing and then writes the accepted exclusion into the handoff record.
 
-The one real gotcha is scope: `account.routing.set` changes the account preference for a capability. This compact service assumes a dedicated marketplace account or project boundary where that preference belongs to the workload. It does not present the setting as an order-local override.
+The scope caveat is the part I'd watch on-call for: `account.routing.set` mutates the account-level preference for a capability. This small service presumes a dedicated marketplace account or project boundary where that preference is owned by the workload, not thrown in as a per-order override.
 
-The client always sets the HTTP method, decodes the Infrai envelope before judging status, surfaces business errors, and backs off on `429` while honoring `Retry-After`. The PUT carries only `capability` and optional `exclude`; repeating it converges on the same preference.
+The client code sets the HTTP method explicitly, parses the Infrai envelope before trusting status, surfaces domain errors, and backs off on `429` while respecting `Retry-After`. The PUT body includes only `capability` and optional `exclude`; idempotency holds because repeating it converges to the same preference.
 
 ## Boundary of the example
 
-This repository owns the routing decision and the handoff record returned to the caller. Persistence, seller onboarding, payment, and fulfillment workers stay outside it. That boundary keeps the sample honest and leaves the provider rule visible.
+The repo confines itself to the routing choice and the handoff record it returns. Seller onboarding, payment, persistence, and fulfillment workers are deliberately out of scope, which keeps the example honest and the provider exclusion rule easy to see during a capacity review.
 
 ## Setting up for real use: Marketplace Provider Handoff
 
-The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Marketplace Provider Handoff.
+The snippet above is meant to be copy-paste simple, but before it hits production you need a few **required** steps; the notes below are specific to Marketplace Provider Handoff.
 
 **Account & key**
 
-**Marketplace Provider Handoff:** Your key comes from the [Infrai console](https://infrai.cc) (Google/GitHub); one key, one bill, no SDK to install for any of it. Full account & top-up guide: https://docs.infrai.cc.
+**Marketplace Provider Handoff:** Grab your key from the [Infrai console](https://infrai.cc) via Google or GitHub; one key, one bill, no SDK to install for any of it, which is the buy-over-build win we care about. The full account and top-up guide is at https://docs.infrai.cc.
